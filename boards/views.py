@@ -1,93 +1,99 @@
 from .models      import Board, Comment
 from .serializers import BoardSerializers, CommentSerializers, BoardDetailSerializers
 
-from rest_framework.views    import APIView
+from rest_framework import mixins, generics, status
 from rest_framework.response import Response
-from rest_framework          import status
 
 
 # 게시글의 목록과 생성
-class BoardListAPIView(APIView):
-    def get(self, request):
-# 게시글 목록 불러오기
-        boards = Board.objects.all()
-        serializer = BoardSerializers(boards, many = True) # Many = True 해줘야 여러 객체들을 불러올 수 있습니다.
-        return Response(serializer.data, status = status.HTTP_200_OK)
+class BoardList(mixins.ListModelMixin,
+                mixins.CreateModelMixin,
+                generics.GenericAPIView):
 
-# 게시글 생성하기
-    def post(self, request):
-        serializer = BoardSerializers(data = request.data)
-        if serializer.is_valid(): # 유효성 검사 True/False값으로 결과값을 지정해줄 수 있다.
-            serializer.save() # 저장
-            return Response(serializer.data, status = status.HTTP_201_CREATED)
-        return Response(status = status.HTTP_400_BAD_REQUEST)
+    queryset         = Board.objects.all()
+    serializer_class = BoardSerializers
+
+    # 게시글 목록 불러오기
+    def get(self, request, *args, **kwargs):
+        return self.list(request, *args, **kwargs)
+	
+    # 게시글 생성하기
+    def post(self, request, *args, **kwargs):
+        return self.create(request, *args, **kwargs)
+
 
 # 게시글불러오기와 수정, 삭제
-class BoardDetailAPIView(APIView):
+class BoardDetail(mixins.RetrieveModelMixin,
+                    mixins.UpdateModelMixin,
+                    mixins.DestroyModelMixin,
+                    generics.GenericAPIView):
+
+    queryset = Board.objects.all()
+    serializer_class = BoardSerializers
+
+	
+    '''1개의 게시글을 불러올 때 댓글을 같이 불러와야 한다.
+    'GET'요청이 들어올 때 불러오는 serializer_class에 따로 생성한
+    Serializers를 불러오게 합니다.'''
+    def get_serializer_class(self):
+        if self.request.method == 'GET':
+            self.serializer_class = BoardDetailSerializers
+        return self.serializer_class
+
 # 게시글 불러오기
-    def get(self, request, pk):
-        # 사용자가 요청한 path Parameter에 넣은 게시글의 pk값 불러오는 게시글의 pk와 일치하는지 검증
-        board = Board.objects.get(pk = pk) 
-        if board == None:
-            return Response(status = status.HTTP_404_NOT_FOUND)
-        serializer = BoardDetailSerializers(board)  # 여기선 하나를 가져오기 때문에 Many(x)
-        return Response(serializer.data, status = status.HTTP_200_OK)
+    def get(self, request, *args, **kwargs):
+        return self.retrieve(request, *args, **kwargs)
 
 # 게시글 삭제하기
-    def delete(self, pk):
-        board = Board.objects.get(pk = pk)
-        if board == None:
-            return Response(status = status.HTTP_404_NOT_FOUND)
-        board.delete()
-        return Response(status = status.HTTP_200_OK)
+    def delete(self, request, *args, **kwargs):
+        return self.destroy(request, *args, **kwargs)
 
 # 게시글 수정하기
-    def put(self, request, pk):
-        board = Board.objects.get(pk = pk)
-        if board == None:
-            return Response(status = status.HTTP_404_NOT_FOUND)
-        # 수정하기위한 보드 데이터를 불러와 client 요청에 따른 data를 담아주기, 부분적인 수정을 위해 patial = True를 해주어야함
-        serializer = BoardSerializers(board, data = request.data, patial = True) 
-        if serializer.is_valid(): # 수정 또한 유효성 검사가 필요
-            serializer.save()
-            return Response(serializer.date, status = status.HTTP_201_CREATED)
-        return Response(status = status.HTTP_400_BAD_REQUEST)
+    def put(self, request, *args, **kwargs):
+        return self.update(request, *args, **kwargs)
 
 # 게시글에 댓글달기
-class CommentCreateAPIView(APIView):
+class CommentCreate(mixins.CreateModelMixin,
+                    mixins.ListModelMixin,
+                generics.GenericAPIView):
+
+    queryset = Comment.objects.all()
+    serializer_class = CommentSerializers
+
+    #board = pk값을 지정해서 원하는 게시글의 댓글만 생성하게끔 오버라이드한다.
+    def create(self, request, pk, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer, pk)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    #save()변수를 지정해 시리얼라이저에서 따로 지정해줄 필요 없다.
+    def perform_create(self, serializer, pk):
+        serializer.save(board_id = pk)
+
 # 게시글 댓글추가
-    def post(self, request, pk):
-        board = Board.objects.get(pk = pk) # 클라이언트가 요청하는 게시글
-        if board == None:
-            return Response(status = status.HTTP_404_NOT_FOUND)
-        # ForeignKey로 연결되있는 게시글의 아이디를 같이 요청해야지 client가 요청한 게시글에 댓글을 추가하기위한 로직
-        request.data['board'] = board.id 
-        serializer = CommentSerializers(data = request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status = status.HTTP_200_OK)
-        return Response(status = status.HTTP_400_BAD_REQUEST)
+    def post(self, request, *args, **kwargs):
+        return self.create(request, *args, **kwargs)
 
 # 댓글 수정,삭제
-class CommentUpdateDeleteAPIView(APIView):
-#여기서 pk는 게시글의 pk, urls.py에서 필요로 하기에 view에서 사용은 안하지만 선언은 해준다.
+class CommentUpdate(mixins.RetrieveModelMixin,
+                mixins.DestroyModelMixin,
+                mixins.UpdateModelMixin,
+                generics.GenericAPIView):
+
+    queryset = Comment.objects.all()
+    serializer_class = CommentSerializers
+    lookup_url_kwarg = 'comment_pk'
+
+#게시글 댓글 불러오기
+    def get(self, request, *args, **kwargs):
+        return self.retrieve(request, *args, **kwargs)
+
 #게시글 댓글 삭제
-    def delete(self, request, pk, comment_pk):
-        #내가 수정하고자 요청한 댓글의 pk와 get으로 가져오는 pk
-        comment = Comment.objects.get(pk = comment_pk) 
-        if comment == None:
-            return Response(status = status.HTTP_404_NOT_FOUND)
-        comment.delete()
-        return Response(status = status.HTTP_200_OK)
+    def delete(self, request, *args, **kwargs):
+        return self.destroy(request, *args, **kwargs)
 
 #게시글 댓글 수정
-    def put(self, request, pk, comment_pk):
-        comment = Comment.objects.get(pk = comment_pk)
-        if comment == None:
-            return Response(status = status.HTTP_404_NOT_FOUND)
-        #게시글 수정과 같은방법으로 진행해준다.
-        serializer = CommentSerializers(comment, data = request.data, partial = True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status = status.HTTP_200_OK)
-        return Response(status = status.HTTP_400_BAD_REQUEST)
+    def put(self, request, *args, **kwargs):
+        return self.update(request, *args, **kwargs)
